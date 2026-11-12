@@ -1027,13 +1027,18 @@ impl AiHub {
             Some(gap) => Box::new(pace::Paced { inner: model, backend: c.name.clone(), gap }) as Box<dyn ChatModel>,
             None => model,
         };
+        let context_tokens = if e.options.context_tokens.unwrap_or(0) == 0 && local && detect::is_frontier_cloud_model(&c.model) {
+            context::CLOUD_CONTEXT_TOKENS
+        } else {
+            e.options.context_tokens.unwrap_or(0)
+        };
         Ok(ModelSlot {
             name: c.name.clone(),
             model,
             local,
             effort: e.options.effort,
             max_turns: e.options.max_turns.unwrap_or(agent::DEFAULT_MAX_TURNS),
-            context_tokens: e.options.context_tokens.unwrap_or(0),
+            context_tokens,
         })
     }
 
