@@ -1538,6 +1538,55 @@ fn context_tokens_apply_button_disables_until_updated() {
     assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
 }
 
+#[test]
+fn context_tokens_apply_button_reenables_after_failed_save() {
+    use craft_anything_ai::{AiHub, BackendConfig, BackendKind, KeyStore};
+    use egui_kittest::kittest::NodeT;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg_path = dir.path().join("settings.toml");
+    let engine = demo::engine(Mode::Experienced, true);
+    let hub = AiHub::with_stores(engine.clone(), cfg_path.clone(), KeyStore::system());
+    let cfg = BackendConfig {
+        name: "Proxy".into(),
+        kind: BackendKind::OpenaiCompatible,
+        model: "gemini-3.8-flash-high".into(),
+        base_url: Some("http://127.0.0.1:8045/v1".into()),
+        ssh_host: None,
+        enabled: true,
+    };
+    hub.add_backend(cfg, None).unwrap();
+
+    // Replace the settings file with a directory so saving fails on the worker.
+    std::fs::remove_file(&cfg_path).unwrap();
+    std::fs::create_dir_all(&cfg_path).unwrap();
+
+    let mut h = harness(move || CraftApp::new(engine, std::sync::Arc::new(hub)));
+    h.state_mut().refresh_backends();
+    assert!(wait(&mut h, |a| a.backends.iter().any(|b| b.name == "Proxy")));
+    h.state_mut().state.settings_open = true;
+    h.state_mut().state.settings_tab = craft_anything_ui_egui::state::SettingsTab::Ai;
+    h.run_steps(2);
+
+    h.get_all_by_label("Context tokens (max)").next().unwrap().click();
+    h.run_steps(1);
+    h.get_all_by_label("Context tokens (max)").next().unwrap().type_text("250000");
+    h.run_steps(2);
+    assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
+
+    // Clicking Apply submits and disables, then the failed save re-enables Apply for retry.
+    h.get_by_label("Apply").click();
+    assert!(wait(&mut h, |a| a.state.toasts.iter().any(|(_, err)| *err)));
+    h.run_steps(1);
+    assert!(!h.get_by_label("Apply").accesskit_node().is_disabled(), "failed save must allow retrying without editing");
+
+    // Once the settings path is writable again, retrying the unchanged value succeeds.
+    std::fs::remove_dir_all(&cfg_path).unwrap();
+    h.get_by_label("Apply").click();
+    assert!(wait(&mut h, |a| a.backend_options.get("Proxy").and_then(|o| o.context_tokens) == Some(250_000)));
+    h.run_steps(1);
+    assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
+}
+
 /// The picker exposes only the chosen model's depths and clears an old depth when changing models.
 #[test]
 fn opencode_picker_offers_only_the_selected_models_thinking_depths() {

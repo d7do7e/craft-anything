@@ -338,6 +338,7 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
     // Taken out while the rows borrow the app, and put back after them.
     let mut folder_drafts = std::mem::take(&mut app.folder_inputs);
     let mut context_drafts = std::mem::take(&mut app.context_inputs);
+    let mut context_submitted = std::mem::take(&mut app.context_submitted);
     let mut key_drafts = std::mem::take(&mut app.backend_key_inputs);
     let (mut pick_model, mut chosen_model, mut close_picker) = (None, None, false);
     let mut chosen_effort = None;
@@ -608,12 +609,10 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
                 ui.add_space(4.0);
                 let saved_ctx = app.backend_options.get(&b.name).and_then(|o| o.context_tokens).filter(|&n| n > 0).map(|n| n.to_string()).unwrap_or_default();
                 let ctx_id = egui::Id::new(("context-tokens", &b.name));
-                let submitted_id = egui::Id::new(("context-tokens-submitted", &b.name));
                 if context_drafts.get(&b.name).is_some_and(|d| d.trim() == saved_ctx) && !ui.memory(|m| m.has_focus(ctx_id)) {
                     context_drafts.remove(&b.name);
                 }
                 let mut ctx_text = context_drafts.get(&b.name).cloned().unwrap_or_else(|| saved_ctx.clone());
-                let mut submitted = ui.data(|d| d.get_temp::<String>(submitted_id));
                 ui.horizontal_wrapped(|ui| {
                     let label = ui.label(RichText::new(tr("Context tokens (max)")).size(theme::CAPTION).color(t.text_dim));
                     let r = ui
@@ -628,14 +627,13 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
                         .on_hover_text(tr("Local addresses default to 24,000 tokens unless you specify a custom limit (e.g. 150000 or 250000 when using a local proxy for a large model)."));
                     if r.changed() {
                         context_drafts.insert(b.name.clone(), ctx_text.clone());
-                        submitted = None;
-                        ui.data_mut(|d| d.remove::<String>(submitted_id));
+                        context_submitted.remove(&b.name);
                     }
                     let trimmed = ctx_text.trim().to_string();
-                    let can_apply = trimmed != saved_ctx && submitted.as_deref() != Some(trimmed.as_str());
+                    let can_apply = trimmed != saved_ctx && context_submitted.get(&b.name).map(String::as_str) != Some(trimmed.as_str());
                     let entered = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if (widgets::primary_icon(ui, None, "Apply", can_apply).clicked() || entered) && can_apply {
-                        ui.data_mut(|d| d.insert_temp(submitted_id, trimmed.clone()));
+                        context_submitted.insert(b.name.clone(), trimmed.clone());
                         ui.ctx().request_repaint();
                         save_context = Some((b.name.clone(), trimmed));
                     }
@@ -717,11 +715,12 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
         });
         ui.add_space(6.0);
     }
-    key_drafts.retain(|name, _| app.backends.iter().any(|backend| &backend.name == name));
     context_drafts.retain(|name, _| app.backends.iter().any(|backend| &backend.name == name));
+    context_submitted.retain(|name, _| app.backends.iter().any(|backend| &backend.name == name));
     app.backend_key_inputs = key_drafts;
     app.folder_inputs = folder_drafts;
     app.context_inputs = context_drafts;
+    app.context_submitted = context_submitted;
     if let Some((name, key)) = save_key {
         app.save_backend_key(name, key);
     }

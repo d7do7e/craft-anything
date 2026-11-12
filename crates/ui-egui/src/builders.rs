@@ -300,9 +300,11 @@ impl CraftApp {
     /// Set or clear an API backend's `context_tokens` override (`None` or `Some(0)`: default).
     pub fn set_context_tokens(&mut self, name: &str, context_tokens: Option<u64>) {
         let (hub, name) = (self.hub.clone(), name.to_string());
+        let submitted =
+            self.context_submitted.entry(name.clone()).or_insert_with(|| context_tokens.filter(|&n| n > 0).map(|n| n.to_string()).unwrap_or_default()).clone();
         self.jobs.spawn(tr("Set an AI's context limit"), false, move |_| {
-            hub.set_context_tokens(&name, context_tokens).map_err(|e| e.message)?;
-            Ok(crate::backends(&hub))
+            let result = hub.set_context_tokens(&name, context_tokens).map(|_| Box::new(crate::backends(&hub))).map_err(|e| e.message);
+            Ok(crate::Done::ContextTokensResult { name, submitted, result })
         });
     }
 

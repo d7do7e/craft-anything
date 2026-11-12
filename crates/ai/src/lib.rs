@@ -798,10 +798,14 @@ impl AiHub {
 
     /// Set or clear a backend's `context_tokens` override (`None` or `Some(0)` restores the default).
     pub fn set_context_tokens(&self, name: &str, context_tokens: Option<u64>) -> Result<bool, ToolError> {
-        let mut cfg = self.config_to_change()?;
+        let mut s = self.engine.session();
+        let mut cfg = AiConfig::from_table(&s.settings.ai)?;
         let Some(b) = cfg.backends.iter_mut().find(|b| b.config.name == name) else { return Ok(false) };
         b.options.context_tokens = context_tokens.filter(|&n| n > 0);
-        self.save_config(&cfg)?;
+        let mut next = s.settings.clone();
+        next.ai = cfg.to_table()?;
+        next.save_to(&self.settings_path())?;
+        s.settings = next;
         Ok(true)
     }
 
