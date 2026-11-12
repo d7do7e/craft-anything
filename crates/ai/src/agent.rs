@@ -331,6 +331,8 @@ pub struct AgentLoop {
     /// What each backend's server said its window is when asked ahead of time, by chain position:
     /// how many times it was asked and the window it named (see [`AgentLoop::ask_window`]).
     read_windows: BTreeMap<usize, (u8, Option<u64>)>,
+    /// Model turns completed since the conversation was last summarised (or resumed).
+    turns_since_summary: usize,
 }
 
 /// How many times a server is asked for its window: before the backend's first turn, and once
@@ -426,6 +428,7 @@ impl AgentLoop {
             let tools = self.tool_defs();
             let system = self.system.clone().unwrap_or_default();
             let Some(result) = self.one_turn(&system, &tools, effort, &mut msg_usage, &mut msg_cost) else { break };
+            self.turns_since_summary = self.turns_since_summary.saturating_add(1);
             self.last_input = result.usage.input_tokens + result.usage.cache_read_tokens + result.usage.cache_write_tokens;
             self.last_history_estimate = context::estimate_tokens(&self.history).max(1);
             let (slot_name, local, model_id) = match self.chain.get(self.current) {
@@ -599,7 +602,8 @@ impl AgentLoop {
         let explicit_budget = self.cfg.context_tokens > 0 || self.chain.get(self.current).is_some_and(|s| s.context_tokens > 0);
         let tiny_test_budget = budget < 1000;
         let room_left = budget.saturating_sub(effective_overhead);
-        let already_summarised_recently = self.history.first().is_some_and(context::is_summary) && self.history.len() < context::MIN_MESSAGES_AFTER_SUMMARY;
+        let already_summarised_recently = self.history.first().is_some_and(context::is_summary)
+            && (self.history.len() < context::MIN_MESSAGES_AFTER_SUMMARY || self.turns_since_summary < context::MIN_TURNS_AFTER_SUMMARY);
         let small_history = estimate <= context::MIN_HISTORY_ALLOWANCE || already_summarised_recently;
         // Skip compaction when static overhead leaves too little room for a summary+turn cycle to
         // help (e.g. a 24k local default with large tool schemas), or when an explicit budget is
@@ -669,6 +673,7 @@ impl AgentLoop {
         };
         let before = self.history.len();
         self.history = context::summarised(&self.history, cut, &text);
+        self.turns_since_summary = 0;
         self.host.journal("context", json!({"action": "summary", "messages_before": before, "messages_after": self.history.len()}));
         self.save_transcript();
         accounted
@@ -932,6 +937,7 @@ impl ApiConversation {
             failed_builds: 0,
             server_windows: BTreeMap::new(),
             read_windows: BTreeMap::new(),
+            turns_since_summary: 0,
         };
         let busy2 = busy.clone();
         std::thread::Builder::new()
@@ -1491,6 +1497,7 @@ pub(crate) mod tests {
             failed_builds: 0,
             server_windows: BTreeMap::new(),
             read_windows: BTreeMap::new(),
+            turns_since_summary: 0,
         };
         let tools = [ToolDef { name: "look".into(), description: "x".repeat(4000), schema: json!({"type": "object"}) }];
 
@@ -1996,5 +2003,47 @@ pub(crate) mod tests {
         assert_eq!(seen.len(), 3, "turn 1 exceeds 8k, then summarises once, then finishes without looping");
         assert!(seen[1].last().unwrap().text().contains("summary of the work so far"));
         assert!(seen[2][0].text().contains("Compact summary."));
+    }
+
+    #[test]
+    fn long_retained_tail_after_summary_does_not_loop_compaction() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("transcript.json");
+        // Resumed conversation with 27 text messages (~24,300 tokens, so trim_old trims nothing):
+        // first compaction keeps 1/3 (~9+ messages, >= MIN_MESSAGES_AFTER_SUMMARY and >
+        // MIN_HISTORY_ALLOWANCE). Under high static overhead on a 24k local budget, consecutive
+        // turns must not re-summarise immediately.
+        let mut history = vec![Msg::user_text("x".repeat(3_600))];
+        for _ in 0..13 {
+            history.push(Msg { role: Speaker::Assistant, blocks: vec![Block::Text { text: "x".repeat(3_600) }] });
+            history.push(Msg::user_text("x".repeat(3_600)));
+        }
+        context::save(&transcript, &history, true).unwrap();
+
+        let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let summary_reply = turn(vec![Block::Text { text: "Compact summary.".into() }], StopReason::EndTurn);
+        let tool_turn = |id: &str| {
+            let mut r = turn(vec![Block::ToolUse { id: id.into(), name: "look".into(), input: json!({}) }], StopReason::ToolUse).unwrap();
+            r.usage.input_tokens = 8_000;
+            r.usage.cache_read_tokens = 20_000;
+            Ok(r)
+        };
+        let done_turn = {
+            let mut r = turn(vec![Block::Text { text: "finished".into() }], StopReason::EndTurn).unwrap();
+            r.usage.input_tokens = 8_000;
+            r.usage.cache_read_tokens = 20_000;
+            Ok(r)
+        };
+        let script = Scripted { turns: VecDeque::from([summary_reply, tool_turn("n1"), tool_turn("n2"), tool_turn("n3"), done_turn]), seen: seen.clone() };
+        let slot = ModelSlot { name: "LocalProxy".into(), model: Box::new(script), local: true, effort: None, max_turns: 10, context_tokens: 0 };
+        let mut conversation =
+            ApiConversation::start(host.clone(), vec![slot], LoopConfig { transcript: Some(transcript), deep: true, ..LoopConfig::default() }).unwrap();
+        conversation.send("continue");
+        let events = drain_until_done(&mut conversation, |_, _| {});
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "finished")), "{events:?}");
+        let summaries = events.iter().filter(|e| matches!(e, AgentEvent::Status { text } if text.contains("Making room"))).count();
+        assert_eq!(summaries, 1, "retained tail >= 9 messages must not trigger repeat summaries on consecutive turns: {events:?}");
+        assert_eq!(seen.lock().unwrap().len(), 5, "one initial summary plus four normal turns");
     }
 }

@@ -98,6 +98,10 @@ pub const SUMMARY_PREFIX: &str = "(Earlier messages were replaced by this summar
 /// Minimum messages retained/accumulated after a summary before allowing another summary when
 /// static overhead dominates the configured budget.
 pub const MIN_MESSAGES_AFTER_SUMMARY: usize = 9;
+/// Minimum model turns required after a summary before another summary may run while static
+/// overhead dominates the budget, even if `cut_point` retained `MIN_MESSAGES_AFTER_SUMMARY` or
+/// more tail messages.
+pub const MIN_TURNS_AFTER_SUMMARY: usize = 4;
 
 /// Whether `msg` is a context-compaction summary produced by [`summarised`].
 pub fn is_summary(msg: &Msg) -> bool {
