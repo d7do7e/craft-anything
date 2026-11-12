@@ -489,6 +489,8 @@ pub struct CraftApp {
     pub context_inputs: std::collections::BTreeMap<String, String>,
     /// Context token values submitted for each backend until the save finishes or is edited.
     pub context_submitted: std::collections::BTreeMap<String, String>,
+    /// Backends whose context-token save is currently running on a worker thread.
+    pub context_pending: std::collections::BTreeSet<String>,
     /// The backend the person chose to build with (Settings → AI), if any.
     pub builder: Option<String>,
     /// The backend chosen to take a game's files out in Deep mode, if any.
@@ -638,6 +640,7 @@ impl CraftApp {
             folder_inputs: Default::default(),
             context_inputs: Default::default(),
             context_submitted: Default::default(),
+            context_pending: Default::default(),
             builder: None,
             extractor: None,
             detected: None,
@@ -1638,27 +1641,32 @@ impl CraftApp {
             Done::AgentConnection(name, result) => {
                 self.agent_connections.insert(name, Some(result));
             }
-            Done::ContextTokensResult { name, submitted, result } => match result {
-                Ok(done) => {
-                    if let Done::Backends(b, builder, extractor, options, replaced) = *done {
-                        self.apply_backends(b, builder, extractor, options, replaced);
-                    }
-                    let saved = self.backend_options.get(&name).and_then(|o| o.context_tokens).filter(|&n| n > 0).map(|n| n.to_string()).unwrap_or_default();
-                    if self.context_submitted.get(&name).is_some_and(|s| s == &submitted) && (submitted == saved || (submitted == "0" && saved.is_empty())) {
-                        if submitted == "0" && saved.is_empty() && self.context_inputs.get(&name).is_some_and(|d| d.trim() == "0") {
-                            self.context_inputs.remove(&name);
+            Done::ContextTokensResult { name, submitted, result } => {
+                self.context_pending.remove(&name);
+                match result {
+                    Ok(done) => {
+                        if let Done::Backends(b, builder, extractor, options, replaced) = *done {
+                            self.apply_backends(b, builder, extractor, options, replaced);
                         }
-                        self.context_submitted.remove(&name);
+                        let saved =
+                            self.backend_options.get(&name).and_then(|o| o.context_tokens).filter(|&n| n > 0).map(|n| n.to_string()).unwrap_or_default();
+                        if self.context_submitted.get(&name).is_some_and(|s| s == &submitted) && (submitted == saved || (submitted == "0" && saved.is_empty()))
+                        {
+                            if submitted == "0" && saved.is_empty() && self.context_inputs.get(&name).is_some_and(|d| d.trim() == "0") {
+                                self.context_inputs.remove(&name);
+                            }
+                            self.context_submitted.remove(&name);
+                        }
+                    }
+                    Err(error) => {
+                        if self.context_submitted.get(&name).is_some_and(|s| s == &submitted) {
+                            self.context_submitted.remove(&name);
+                        }
+                        self.log(true, error.clone());
+                        self.toast(error, true);
                     }
                 }
-                Err(error) => {
-                    if self.context_submitted.get(&name).is_some_and(|s| s == &submitted) {
-                        self.context_submitted.remove(&name);
-                    }
-                    self.log(true, error.clone());
-                    self.toast(error, true);
-                }
-            },
+            }
             Done::Backends(b, builder, extractor, options, replaced) => {
                 self.apply_backends(b, builder, extractor, options, replaced);
             }

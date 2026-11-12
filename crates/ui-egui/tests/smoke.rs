@@ -1530,10 +1530,16 @@ fn context_tokens_apply_button_disables_until_updated() {
     assert!(wait(&mut h, |a| a.backend_options.get("Proxy").and_then(|o| o.context_tokens) == Some(250_000)));
     assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
 
-    // Editing the field re-enables Apply.
+    // Editing while a save is still in flight keeps Apply disabled until the worker finishes.
+    h.state_mut().context_pending.insert("Proxy".into());
     h.get_all_by_label("Context tokens (max)").next().unwrap().click();
     h.run_steps(1);
     h.get_all_by_label("Context tokens (max)").next().unwrap().type_text("1");
+    h.run_steps(2);
+    assert!(h.get_by_label("Apply").accesskit_node().is_disabled(), "editing during an in-flight save must not allow concurrent Apply");
+
+    // Once the in-flight save finishes, the modified draft re-enables Apply.
+    h.state_mut().context_pending.remove("Proxy");
     h.run_steps(2);
     assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
 }

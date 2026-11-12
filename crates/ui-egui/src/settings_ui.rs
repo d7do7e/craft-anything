@@ -630,7 +630,8 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
                         context_submitted.remove(&b.name);
                     }
                     let trimmed = ctx_text.trim().to_string();
-                    let can_apply = trimmed != saved_ctx && context_submitted.get(&b.name).map(String::as_str) != Some(trimmed.as_str());
+                    let pending = app.context_pending.contains(&b.name);
+                    let can_apply = !pending && trimmed != saved_ctx && context_submitted.get(&b.name).map(String::as_str) != Some(trimmed.as_str());
                     let entered = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if (widgets::primary_icon(ui, None, "Apply", can_apply).clicked() || entered) && can_apply {
                         context_submitted.insert(b.name.clone(), trimmed.clone());
