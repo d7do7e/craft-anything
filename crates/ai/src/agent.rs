@@ -599,6 +599,7 @@ impl AgentLoop {
         // Unless a tiny test budget (< 1000) or an explicit server window refusal applies, keep a
         // minimum history allowance above static overhead before summarizing.
         let has_server_window = self.server_windows.contains_key(&self.current);
+        let has_read_window = self.read_windows.get(&self.current).and_then(|(_, w)| *w).is_some();
         let explicit_budget = self.cfg.context_tokens > 0 || self.chain.get(self.current).is_some_and(|s| s.context_tokens > 0);
         let tiny_test_budget = budget < 1000;
         let room_left = budget.saturating_sub(effective_overhead);
@@ -606,10 +607,11 @@ impl AgentLoop {
             && (self.history.len() < context::MIN_MESSAGES_AFTER_SUMMARY || self.turns_since_summary < context::MIN_TURNS_AFTER_SUMMARY);
         let small_history = estimate <= context::MIN_HISTORY_ALLOWANCE || already_summarised_recently;
         // Skip compaction when static overhead leaves too little room for a summary+turn cycle to
-        // help (e.g. a 24k local default with large tool schemas), or when an explicit budget is
-        // dominated by static overhead / already summarised within MIN_MESSAGES_AFTER_SUMMARY turns.
-        // An explicit budget that still leaves room above static overhead still summarises.
-        let overhead_blocks_compaction = if explicit_budget {
+        // help (e.g. a 24k local default with large tool schemas), or when an explicit or
+        // proactively discovered window is already dominated by static overhead / recently
+        // summarised. When a known limit still leaves room above static overhead, unsummarised
+        // history still summarises to stay within it.
+        let overhead_blocks_compaction = if explicit_budget || has_read_window {
             effective_overhead >= budget || (already_summarised_recently && room_left < context::MIN_HISTORY_ALLOWANCE)
         } else {
             room_left < context::MIN_HISTORY_ALLOWANCE
@@ -2045,5 +2047,59 @@ pub(crate) mod tests {
         let summaries = events.iter().filter(|e| matches!(e, AgentEvent::Status { text } if text.contains("Making room"))).count();
         assert_eq!(summaries, 1, "retained tail >= 9 messages must not trigger repeat summaries on consecutive turns: {events:?}");
         assert_eq!(seen.lock().unwrap().len(), 5, "one initial summary plus four normal turns");
+    }
+
+    #[test]
+    fn discovered_read_window_still_summarises_unsummarised_history_without_looping() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("transcript.json");
+        // Five text messages totalling ~5,500 tokens (~22,000 chars); trim_old trims nothing.
+        let history = vec![
+            Msg::user_text("x".repeat(4_400)),
+            Msg { role: Speaker::Assistant, blocks: vec![Block::Text { text: "x".repeat(4_400) }] },
+            Msg::user_text("x".repeat(4_400)),
+            Msg { role: Speaker::Assistant, blocks: vec![Block::Text { text: "x".repeat(4_400) }] },
+            Msg::user_text("x".repeat(4_400)),
+        ];
+        context::save(&transcript, &history, true).unwrap();
+
+        struct FixedWindow {
+            inner: Scripted,
+            window: u64,
+        }
+        impl ChatModel for FixedWindow {
+            fn turn(&mut self, req: &TurnRequest<'_>, on_delta: &mut dyn FnMut(Delta), stop: &Stop) -> Result<TurnResult, ToolError> {
+                self.inner.turn(req, on_delta, stop)
+            }
+            fn model(&self) -> String {
+                "read-window".into()
+            }
+            fn context_window(&self) -> Option<crate::window::Window> {
+                Some(crate::window::Window { tokens: self.window, source: "test" })
+            }
+        }
+
+        let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        // Discovered window = 16,384 -> budget = 12,288. Turn 1 reports 12,500 input tokens
+        // (~7,000 overhead -> room_left = 5,288 < MIN_HISTORY_ALLOWANCE). Unsummarised history
+        // must still summarise once, and the next turn must not loop even if input stays high.
+        let mut first = turn(vec![Block::ToolUse { id: "t1".into(), name: "look".into(), input: json!({}) }], StopReason::ToolUse).unwrap();
+        first.usage.input_tokens = 12_500;
+        let summary_reply = turn(vec![Block::Text { text: "Compact summary.".into() }], StopReason::EndTurn);
+        let mut tool_after = turn(vec![Block::ToolUse { id: "t2".into(), name: "look".into(), input: json!({}) }], StopReason::ToolUse).unwrap();
+        tool_after.usage.input_tokens = 12_500;
+        let done_turn = turn(vec![Block::Text { text: "done".into() }], StopReason::EndTurn);
+        let script = Scripted { turns: VecDeque::from([Ok(first), summary_reply, Ok(tool_after), done_turn]), seen: seen.clone() };
+        let model = FixedWindow { inner: script, window: 16_384 };
+        let slot = ModelSlot { name: "ReadWindow".into(), model: Box::new(model), local: true, effort: None, max_turns: 10, context_tokens: 0 };
+        let mut conversation =
+            ApiConversation::start(host.clone(), vec![slot], LoopConfig { transcript: Some(transcript), deep: true, ..LoopConfig::default() }).unwrap();
+        conversation.send("continue");
+        let events = drain_until_done(&mut conversation, |_, _| {});
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "done")), "{events:?}");
+        let summaries = events.iter().filter(|e| matches!(e, AgentEvent::Status { text } if text.contains("Making room"))).count();
+        assert_eq!(summaries, 1, "discovered read window must summarise unsummarised history once without looping: {events:?}");
+        assert_eq!(seen.lock().unwrap().len(), 4);
     }
 }
