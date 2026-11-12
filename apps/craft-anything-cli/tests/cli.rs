@@ -120,6 +120,10 @@ fn ai_context_sets_reads_and_clears_context_tokens() {
     assert!(v["context_tokens"].is_null(), "{v}");
 
     assert!(!cli(&["ai", "context", "Proxy", "abc", "--format", "json"], cfg.path()).success);
+
+    assert!(!cli(&["ai", "add", "Claude", "--kind", "agent_cli", "--model", "claude", "--context-tokens", "8192"], cfg.path()).success);
+    assert!(cli(&["ai", "add", "Claude", "--kind", "agent_cli", "--model", "claude"], cfg.path()).success);
+    assert!(!cli(&["ai", "context", "Claude", "8192", "--format", "json"], cfg.path()).success);
 }
 
 /// #249: in Clean room a target tool the mode refuses was listed as available, because nothing

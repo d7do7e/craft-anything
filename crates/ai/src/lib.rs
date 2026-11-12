@@ -801,6 +801,9 @@ impl AiHub {
         let mut s = self.engine.session();
         let mut cfg = AiConfig::from_table(&s.settings.ai)?;
         let Some(b) = cfg.backends.iter_mut().find(|b| b.config.name == name) else { return Ok(false) };
+        if b.config.kind == BackendKind::AgentCli && context_tokens.is_some_and(|n| n > 0) {
+            return Err(ToolError::invalid("Agent apps do not take a context limit. Set it on an API backend."));
+        }
         b.options.context_tokens = context_tokens.filter(|&n| n > 0);
         let mut next = s.settings.clone();
         next.ai = cfg.to_table()?;

@@ -491,6 +491,8 @@ pub struct CraftApp {
     pub context_submitted: std::collections::BTreeMap<String, String>,
     /// Backends whose context-token save is currently running on a worker thread.
     pub context_pending: std::collections::BTreeSet<String>,
+    /// Which backend owns each pending context-token save job, including panics/failures before `Done`.
+    pub(crate) context_jobs: std::collections::BTreeMap<u64, String>,
     /// The backend the person chose to build with (Settings → AI), if any.
     pub builder: Option<String>,
     /// The backend chosen to take a game's files out in Deep mode, if any.
@@ -641,6 +643,7 @@ impl CraftApp {
             context_inputs: Default::default(),
             context_submitted: Default::default(),
             context_pending: Default::default(),
+            context_jobs: Default::default(),
             builder: None,
             extractor: None,
             detected: None,
@@ -1548,6 +1551,7 @@ impl CraftApp {
     fn handle_done(&mut self, done: jobs::Finished<Done>) {
         let job = done.job;
         let checked_agent = self.agent_connection_jobs.remove(&job);
+        let context_job = self.context_jobs.remove(&job);
         if self.saving == Some(job) {
             self.saving = None;
         }
@@ -1561,6 +1565,10 @@ impl CraftApp {
         let done = match done.result {
             Ok(d) => d,
             Err(e) => {
+                if let Some(name) = context_job {
+                    self.context_pending.remove(&name);
+                    self.context_submitted.remove(&name);
+                }
                 if let Some(agent) = checked_agent {
                     self.agent_connections.insert(agent, Some(Err(e.clone())));
                 }
@@ -1650,9 +1658,20 @@ impl CraftApp {
                         }
                         let saved =
                             self.backend_options.get(&name).and_then(|o| o.context_tokens).filter(|&n| n > 0).map(|n| n.to_string()).unwrap_or_default();
-                        if self.context_submitted.get(&name).is_some_and(|s| s == &submitted) && (submitted == saved || (submitted == "0" && saved.is_empty()))
-                        {
-                            if submitted == "0" && saved.is_empty() && self.context_inputs.get(&name).is_some_and(|d| d.trim() == "0") {
+                        let saved_num = self.backend_options.get(&name).and_then(|o| o.context_tokens).unwrap_or(0);
+                        let submitted_num = if submitted.is_empty() { Ok(0) } else { submitted.parse::<u64>() };
+                        let matches_saved = match submitted_num {
+                            Ok(n) => n == saved_num,
+                            Err(_) => submitted == saved,
+                        };
+                        if self.context_submitted.get(&name).is_some_and(|s| s == &submitted) && matches_saved {
+                            if let Ok(n) = submitted_num
+                                && n == saved_num
+                                && self.context_inputs.get(&name).and_then(|d| {
+                                    let t = d.trim();
+                                    if t.is_empty() { Some(0) } else { t.parse::<u64>().ok() }
+                                }) == Some(saved_num)
+                            {
                                 self.context_inputs.remove(&name);
                             }
                             self.context_submitted.remove(&name);

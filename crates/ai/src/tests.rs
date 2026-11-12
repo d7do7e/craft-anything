@@ -915,6 +915,15 @@ fn a_server_is_added_by_its_address() {
     assert_eq!(h.build_model(&h.entry("Proxy box").unwrap()).unwrap().context_tokens, 128_000);
     assert!(h.set_context_tokens("Proxy box", None).unwrap());
     assert_eq!(h.options()["Proxy box"].context_tokens, None);
+    assert!(!h.set_context_tokens("Missing box", Some(32_000)).unwrap());
+
+    h.add_backend(
+        BackendConfig { name: "Claude".into(), kind: BackendKind::AgentCli, model: "claude".into(), base_url: None, ssh_host: None, enabled: true },
+        None,
+    )
+    .unwrap();
+    assert!(h.set_context_tokens("Claude", Some(32_000)).is_err(), "agent CLIs must reject positive context_tokens");
+    assert!(h.set_context_tokens("Claude", None).unwrap(), "clearing context_tokens on an agent CLI remains allowed");
 }
 
 /// #1429: a server that takes the request and doesn't list its models in time (still starting, or

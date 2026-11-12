@@ -277,6 +277,9 @@ pub fn ai(cli: &Cli, c: &AiCommand, f: Format) -> u8 {
                 };
             }
             let model = model.clone().or_else(|| kind.suggested_models().first().map(|m| m.to_string())).unwrap_or_default();
+            if kind == BackendKind::AgentCli && context_tokens.is_some_and(|n| n > 0) {
+                return fail(&craft_anything_evidence::ToolError::invalid("Agent apps do not take a context limit. Set it on an API backend."), f);
+            }
             let cfg = BackendConfig { name: name.clone(), kind, model, base_url: base_url.clone(), ssh_host: ssh_host.clone(), enabled: true };
             let entry = BackendEntry {
                 config: cfg.clone(),

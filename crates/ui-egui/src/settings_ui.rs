@@ -619,12 +619,12 @@ fn ai(app: &mut CraftApp, ui: &mut Ui) {
                         .add(
                             egui::TextEdit::singleline(&mut ctx_text)
                                 .id(ctx_id)
-                                .hint_text(tr("default (24000 local, 150000 cloud)"))
+                                .hint_text(tr("default (server window; 24000 local or 150000 cloud if unknown)"))
                                 .desired_width(220.0)
                                 .frame(widgets::text_field_frame_compact(&t)),
                         )
                         .labelled_by(label.id)
-                        .on_hover_text(tr("Local addresses default to 24,000 tokens unless you specify a custom limit (e.g. 150000 or 250000 when using a local proxy for a large model)."));
+                        .on_hover_text(tr("Without a custom limit, the budget follows the server's reported context window, keeping a quarter free for the reply. Local addresses use 24,000 tokens only when no window is reported. Set a custom limit (e.g. 150000 or 250000 when using a local proxy for a large model)."));
                     if r.changed() {
                         context_drafts.insert(b.name.clone(), ctx_text.clone());
                         context_submitted.remove(&b.name);
@@ -915,17 +915,17 @@ pub(crate) fn server_form(app: &mut CraftApp, ui: &mut Ui) {
         let r = ui
             .add(
                 egui::TextEdit::singleline(&mut form.context_tokens)
-                    .hint_text(tr("context tokens (optional, default: 24000 for local, 150000 for cloud)"))
+                    .hint_text(tr("context tokens (optional; default: server window, or 24000 local / 150000 cloud if unknown)"))
                     .desired_width(w)
                     .frame(widgets::text_field_frame_compact(&t)),
             )
-            .on_hover_text(tr("Local addresses default to 24,000 tokens unless you specify a custom limit (e.g. 150000 or 250000 when using a local proxy for a large model)."));
+            .on_hover_text(tr("Without a custom limit, the budget follows the server's reported context window, keeping a quarter free for the reply. Local addresses use 24,000 tokens only when no window is reported. Set a custom limit (e.g. 150000 or 250000 when using a local proxy for a large model)."));
         widgets::named(r, &tr("Context tokens (max)"));
         add = widgets::primary_icon(ui, Some("plus"), "Add", ready).clicked() && ready;
     });
     ui.label(
         RichText::new(tr(
-            "Local addresses default to 24,000 tokens unless you specify a custom limit (e.g. 150000 or 250000 when using a local proxy for a large model).",
+            "Without a custom limit, the budget follows the server's reported context window, keeping a quarter free for the reply. Local addresses use 24,000 tokens only when no window is reported. Set a custom limit (e.g. 150000 or 250000 when using a local proxy for a large model).",
         ))
         .color(t.text_faint)
         .size(theme::CAPTION),
@@ -1806,7 +1806,7 @@ mod model_options_tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("Local addresses default to 24,000 tokens"), "{rendered}");
+        assert!(rendered.contains("Without a custom limit, the budget follows the server's reported context window"), "{rendered}");
 
         app.server_form.name = "Proxy".into();
         app.server_form.address = "http://127.0.0.1:8045/v1".into();

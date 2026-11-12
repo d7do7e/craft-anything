@@ -306,10 +306,16 @@ impl CraftApp {
         self.context_pending.insert(name.clone());
         let submitted =
             self.context_submitted.entry(name.clone()).or_insert_with(|| context_tokens.filter(|&n| n > 0).map(|n| n.to_string()).unwrap_or_default()).clone();
-        self.jobs.spawn(tr("Set an AI's context limit"), false, move |_| {
-            let result = hub.set_context_tokens(&name, context_tokens).map(|_| Box::new(crate::backends(&hub))).map_err(|e| e.message);
+        let job_name = name.clone();
+        let job = self.jobs.spawn(tr("Set an AI's context limit"), false, move |_| {
+            let result = match hub.set_context_tokens(&name, context_tokens) {
+                Ok(true) => Ok(Box::new(crate::backends(&hub))),
+                Ok(false) => Err(format!("{name} isn't configured anymore.")),
+                Err(e) => Err(e.message),
+            };
             Ok(crate::Done::ContextTokensResult { name, submitted, result })
         });
+        self.context_jobs.insert(job, job_name);
     }
 
     /// Connect the server in Settings → AI's address form. Its key goes to the keychain; the form

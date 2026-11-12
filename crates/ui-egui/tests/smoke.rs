@@ -1542,6 +1542,19 @@ fn context_tokens_apply_button_disables_until_updated() {
     h.state_mut().context_pending.remove("Proxy");
     h.run_steps(2);
     assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
+
+    // Saving a numeric form with leading zeroes normalizes cleanly and clears the submitted lock.
+    h.get_all_by_label("Context tokens (max)").next().unwrap().click();
+    h.run_steps(1);
+    h.state_mut().context_inputs.insert("Proxy".into(), "000320000".into());
+    h.run_steps(2);
+    assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
+    h.get_by_label("Apply").click();
+    assert!(wait(&mut h, |a| a.backend_options.get("Proxy").and_then(|o| o.context_tokens) == Some(320_000)));
+    h.run_steps(2);
+    assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
+    assert!(!h.state().context_submitted.contains_key("Proxy"));
+    assert!(!h.state().context_inputs.contains_key("Proxy"));
 }
 
 #[test]
