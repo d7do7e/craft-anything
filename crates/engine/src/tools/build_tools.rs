@@ -215,7 +215,7 @@ fn in_project_or_app(ws: &Workspace, rel: &str, for_write: bool) -> Result<PathB
     if ws.manifest.app_in_root || path.exists() || rel.starts_with(['/', '\\']) {
         return Ok(path);
     }
-    let starts_with_app = rel == "." || rel == "app" || rel.starts_with("app/") || (cfg!(windows) && rel.starts_with("app\\"));
+    let starts_with_app = inside(&ws.app_dir(), &path) || rel.split(['/', '\\']).find(|c| !c.is_empty() && *c != ".").is_none_or(|first| first == "app");
     if starts_with_app {
         return Ok(path);
     }
@@ -689,5 +689,15 @@ mod tests {
         // Root-level stray file without an app-specific parent still writes to root with the note.
         let stray = call(&e, "build_file_write", json!({"path": "README.md", "content": "hi"})).unwrap();
         assert!(stray["note"].as_str().unwrap().contains("outside app/"), "{stray}");
+
+        // Explicit app/ paths (including ./app/...) must never fall back into a nested app/app/.
+        call(&e, "build_file_write", json!({"path": "app/app/page.tsx", "content": "nested"})).unwrap();
+        let err_plain = call(&e, "build_file_read", json!({"path": "app/page.tsx"})).unwrap_err();
+        let err_dot = call(&e, "build_file_read", json!({"path": "./app/page.tsx"})).unwrap_err();
+        assert_eq!(err_plain.code, err_dot.code);
+        let written = call(&e, "build_file_write", json!({"path": "./app/page.tsx", "content": "top"})).unwrap();
+        assert_eq!(written["written"], "app/page.tsx");
+        assert_eq!(std::fs::read_to_string(ws.app_dir().join("app/page.tsx")).unwrap(), "nested");
+        assert_eq!(std::fs::read_to_string(ws.app_dir().join("page.tsx")).unwrap(), "top");
     }
 }
