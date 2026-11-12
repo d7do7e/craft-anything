@@ -1076,7 +1076,8 @@ impl AiHub {
     /// session (#1102).
     pub fn start_builder(&self, entry: &BackendEntry, beginner: bool, transcript: Option<PathBuf>, deep: bool) -> Result<ApiConversation, ToolError> {
         use craft_anything_engine::Toolset;
-        let toolsets = if deep { self.engine.registry().toolsets() } else { vec![Toolset::Core, Toolset::Build] };
+        let is_local = entry.config.kind == BackendKind::OpenaiCompatible && entry.config.base_url.as_deref().is_none_or(detect::on_this_network);
+        let toolsets = if deep && !is_local { self.engine.registry().toolsets() } else { vec![Toolset::Core, Toolset::Build] };
         self.start_loop(entry, beginner, transcript, deep, &toolsets, true)
     }
 

@@ -575,9 +575,12 @@ impl AgentLoop {
     fn fit_context(&mut self, system: &str, tools: &[ToolDef]) -> Option<(Usage, Option<f64>)> {
         let budget = self.context_budget();
         let estimate = context::estimate_tokens(&self.history).max(1);
+        let overhead = context::estimate_overhead(system, tools);
+        let reported_overhead = self.last_input.saturating_sub(self.last_history_estimate);
+        let effective_overhead = overhead.max(reported_overhead);
         // Without a reported count (a local server often sends none), the system prompt and tool
         // schemas are added from their text; with one, it already includes them.
-        let unreported = (self.last_input == 0).then(|| context::estimate_overhead(system, tools));
+        let unreported = (self.last_input == 0).then_some(overhead);
         // Reported input includes prompt/tool overhead. Add the history accumulated since it
         // was measured; comparing only with the current estimate can miss that growth.
         let size = match unreported {
@@ -585,6 +588,24 @@ impl AgentLoop {
             Some(overhead) => estimate.saturating_add(overhead),
         };
         if size <= budget {
+            return None;
+        }
+        // When static prompt + tool overhead consumes most or all of the budget (for example a 24k
+        // default budget with large tool schemas), compacting a small conversation history cannot
+        // free enough room to fall under `budget`, and would instead loop after every tool call.
+        // Unless a tiny test budget (< 1000) or an explicit server window refusal applies, keep a
+        // minimum history allowance above static overhead before summarizing.
+        let has_server_window = self.server_windows.contains_key(&self.current);
+        let tiny_test_budget = budget < 1000;
+        let room_left = budget.saturating_sub(effective_overhead);
+        let small_history = estimate <= context::MIN_HISTORY_ALLOWANCE
+            || (self.history.first().is_some_and(context::is_summary) && self.history.len() < context::MIN_MESSAGES_AFTER_SUMMARY);
+        if !has_server_window
+            && budget >= context::LOCAL_CONTEXT_TOKENS
+            && room_left < context::MIN_HISTORY_ALLOWANCE
+            && small_history
+            && self.history.len() <= context::KEEP_RECENT
+        {
             return None;
         }
         // Use the same approximate scale to judge the trimmed history before the next turn.
@@ -599,6 +620,9 @@ impl AgentLoop {
         self.host.journal("context", json!({"action": "trim", "blocks": trimmed, "tokens_before": size, "tokens_after": after, "budget": budget}));
         // floor(3 * budget / 4), without overflowing for a large configured budget.
         if trimmed > 0 && after <= budget - budget.div_ceil(4) {
+            return None;
+        }
+        if !has_server_window && !tiny_test_budget && room_left < context::MIN_HISTORY_ALLOWANCE && small_history {
             return None;
         }
         let cut = context::cut_point(&self.history)?;
@@ -1871,5 +1895,65 @@ pub(crate) mod tests {
         assert!(text.contains("\"k\""));
         assert!(id.is_none());
         assert!(truncate_json(&json!("é".repeat(50_000)), 1000).len() < 1100);
+    }
+
+    #[test]
+    fn a_local_budget_with_large_static_overhead_does_not_loop_summaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("transcript.json");
+        // Resumed conversation already starting with a summary and only 2 recent tool turns (5 msgs).
+        let summary_msg = Msg::user_text(format!("{}\n\nPrevious work.", context::SUMMARY_PREFIX));
+        let mut history = vec![summary_msg];
+        for i in 0..2 {
+            let id = format!("t{i}");
+            history.push(Msg { role: Speaker::Assistant, blocks: vec![Block::ToolUse { id: id.clone(), name: "look".into(), input: json!({}) }] });
+            history.push(Msg { role: Speaker::User, blocks: vec![Block::ToolResult { tool_use_id: id, content: "ok".into(), is_error: false }] });
+        }
+        context::save(&transcript, &history, true).unwrap();
+
+        let host = Arc::new(FakeHost { calls: Mutex::default(), journal: Mutex::default() });
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        // Model reports 58k cached input tokens (e.g. tool schemas + prompt) on a 24k local budget.
+        let tool_turn = |id: &str| {
+            let mut r = turn(vec![Block::ToolUse { id: id.into(), name: "look".into(), input: json!({}) }], StopReason::ToolUse).unwrap();
+            r.usage.input_tokens = 3_000;
+            r.usage.cache_read_tokens = 55_000;
+            Ok(r)
+        };
+        let done_turn = {
+            let mut r = turn(vec![Block::Text { text: "finished".into() }], StopReason::EndTurn).unwrap();
+            r.usage.input_tokens = 3_000;
+            r.usage.cache_read_tokens = 55_000;
+            Ok(r)
+        };
+        let script = Scripted { turns: VecDeque::from([tool_turn("n1"), tool_turn("n2"), tool_turn("n3"), done_turn]), seen: seen.clone() };
+        let slot = ModelSlot { name: "LocalProxy".into(), model: Box::new(script), local: true, effort: None, max_turns: 10, context_tokens: 0 };
+        let mut conversation =
+            ApiConversation::start(host.clone(), vec![slot], LoopConfig { transcript: Some(transcript), deep: true, ..LoopConfig::default() }).unwrap();
+        conversation.send("continue");
+        let events = drain_until_done(&mut conversation, |_, _| {});
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::TextDelta { text } if text == "finished")), "{events:?}");
+        assert!(
+            !events.iter().any(|e| matches!(e, AgentEvent::Status { text } if text.contains("Making room"))),
+            "tiny history must not enter compaction loop despite high reported static overhead: {events:?}"
+        );
+        assert_eq!(seen.lock().unwrap().len(), 4, "no summary turns were sent");
+    }
+
+    #[test]
+    fn a_local_builder_keeps_dynamically_enabled_toolsets() {
+        let engine = craft_anything_engine::Engine::shared(craft_anything_engine::testing::session(), crate::tools());
+        let host = EngineHost(engine);
+        let mut enabled = BTreeSet::from([Toolset::Core, Toolset::Build]);
+        let initial = lean_for_local(host.tools(&enabled), &host);
+        assert!(initial.iter().any(|t| t.name == "build_file_read"));
+        assert!(!initial.iter().any(|t| t.name == "formats_wasm_module_show"));
+
+        // Simulating enable_toolset("formats") mid-run:
+        enabled.insert(Toolset::Formats);
+        let after = lean_for_local(host.tools(&enabled), &host);
+        assert!(after.iter().any(|t| t.name == "formats_wasm_module_show"), "dynamically enabled toolset must remain visible");
+        assert!(after.iter().any(|t| t.name == "build_file_read"));
+        assert!(!after.iter().any(|t| t.name == "core_journal_read"), "non-builder Core tools stay filtered");
     }
 }
