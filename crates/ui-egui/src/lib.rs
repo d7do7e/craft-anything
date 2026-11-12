@@ -305,6 +305,8 @@ pub struct ServerForm {
     /// Empty: the first model it lists that can chat.
     pub model: String,
     pub key: String,
+    /// Optional context token limit override (blank / 0: local/cloud default).
+    pub context_tokens: String,
     /// The server being asked for its models (the job, its name, when it started); the form says
     /// it's connecting and for how long (#1429).
     pub connecting: Option<(u64, String, Instant)>,
@@ -478,6 +480,8 @@ pub struct CraftApp {
     pub picking_program_for: Option<String>,
     /// Claude Code folders being typed in Settings → AI, by AI, until they're saved.
     pub folder_inputs: std::collections::BTreeMap<String, String>,
+    /// Context token limit overrides being typed in Settings → AI, by AI, until they're saved.
+    pub context_inputs: std::collections::BTreeMap<String, String>,
     /// The backend the person chose to build with (Settings → AI), if any.
     pub builder: Option<String>,
     /// The backend chosen to take a game's files out in Deep mode, if any.
@@ -625,6 +629,7 @@ impl CraftApp {
             model_tuning: Default::default(),
             picking_program_for: None,
             folder_inputs: Default::default(),
+            context_inputs: Default::default(),
             builder: None,
             extractor: None,
             detected: None,

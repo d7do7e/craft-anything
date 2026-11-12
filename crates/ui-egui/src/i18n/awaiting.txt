@@ -2,3 +2,9 @@
 # One per line, written as in a catalog's first column (\n for a line break).
 # `cargo xtask i18n-coverage` lets these be missing from the catalogs, and fails once a string
 # here is translated in every catalog or no longer shown: the translation PR takes it out.
+Context tokens (max)
+Context tokens must be a whole number.
+Local addresses default to 24,000 tokens unless you specify a custom limit (e.g. 150000 or 250000 when using a local proxy for a large model).
+Set an AI's context limit
+context tokens (optional, default: 24000 for local, 150000 for cloud)
+default (24000 local, 150000 cloud)

@@ -908,6 +908,13 @@ fn a_server_is_added_by_its_address() {
     assert!(h.add_server("No scheme", "192.168.1.20:11434/v1", None, None).is_err());
     assert!(h.add_server(" ", &url, None, None).is_err());
     assert_eq!(h.backends().len(), 2, "only the ones that answered");
+
+    assert_eq!(h.add_server_with_context("Proxy box", &url, Some("llama3"), None, Some(250_000), &CancelToken::default()).unwrap(), "llama3");
+    assert_eq!(h.options()["Proxy box"].context_tokens, Some(250_000));
+    assert!(h.set_context_tokens("Proxy box", Some(128_000)).unwrap());
+    assert_eq!(h.build_model(&h.entry("Proxy box").unwrap()).unwrap().context_tokens, 128_000);
+    assert!(h.set_context_tokens("Proxy box", None).unwrap());
+    assert_eq!(h.options()["Proxy box"].context_tokens, None);
 }
 
 /// #1429: a server that takes the request and doesn't list its models in time (still starting, or

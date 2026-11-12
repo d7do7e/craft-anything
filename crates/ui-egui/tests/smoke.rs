@@ -1490,6 +1490,54 @@ fn a_claude_ais_effort_is_set_in_settings() {
     h.get_by_value("max");
 }
 
+#[test]
+fn context_tokens_apply_button_disables_until_updated() {
+    use craft_anything_ai::{BackendConfig, BackendKind};
+    use egui_kittest::kittest::NodeT;
+    let mut h = harness(|| {
+        let a = demo::app(demo::engine(Mode::Experienced, true));
+        let cfg = BackendConfig {
+            name: "Proxy".into(),
+            kind: BackendKind::OpenaiCompatible,
+            model: "gemini-3.8-flash-high".into(),
+            base_url: Some("http://127.0.0.1:8045/v1".into()),
+            ssh_host: None,
+            enabled: true,
+        };
+        a.hub.add_backend(cfg, None).unwrap();
+        a
+    });
+    h.state_mut().refresh_backends();
+    assert!(wait(&mut h, |a| a.backends.iter().any(|b| b.name == "Proxy")));
+    h.state_mut().state.settings_open = true;
+    h.state_mut().state.settings_tab = craft_anything_ui_egui::state::SettingsTab::Ai;
+    h.run_steps(2);
+
+    // Initially disabled when matching saved value.
+    assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
+
+    // Typing a new value enables Apply.
+    h.get_all_by_label("Context tokens (max)").next().unwrap().click();
+    h.run_steps(1);
+    h.get_all_by_label("Context tokens (max)").next().unwrap().type_text("250000");
+    h.run_steps(2);
+    assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
+
+    // Clicking Apply disables it immediately on the next frame and saves the value.
+    h.get_by_label("Apply").click();
+    h.run_steps(2);
+    assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
+    assert!(wait(&mut h, |a| a.backend_options.get("Proxy").and_then(|o| o.context_tokens) == Some(250_000)));
+    assert!(h.get_by_label("Apply").accesskit_node().is_disabled());
+
+    // Editing the field re-enables Apply.
+    h.get_all_by_label("Context tokens (max)").next().unwrap().click();
+    h.run_steps(1);
+    h.get_all_by_label("Context tokens (max)").next().unwrap().type_text("1");
+    h.run_steps(2);
+    assert!(!h.get_by_label("Apply").accesskit_node().is_disabled());
+}
+
 /// The picker exposes only the chosen model's depths and clears an old depth when changing models.
 #[test]
 fn opencode_picker_offers_only_the_selected_models_thinking_depths() {

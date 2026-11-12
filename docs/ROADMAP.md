@@ -534,7 +534,7 @@ been run live.
       llama.cpp routers don't answer it
 - [x] The first run's AI step can add a model server on another computer by its address (llama.cpp,
       Ollama or LM Studio on a home server), the same form as Settings → AI
-- [ ] Offer an optional "Context tokens (max)" input field in "Add an AI by its address", per-backend
+- [x] Offer an optional "Context tokens (max)" input field in "Add an AI by its address", per-backend
       context token editing in Settings → AI, and matching CLI `ai context` / `ai add --context-tokens`
       options so custom context limits (e.g. for local proxies) don't require hand-editing `config.toml`
       — claimed: d7do7e, branch feature/r5.4-context-tokens-ui

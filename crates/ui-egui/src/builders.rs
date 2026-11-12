@@ -297,16 +297,37 @@ impl CraftApp {
         });
     }
 
+    /// Set or clear an API backend's `context_tokens` override (`None` or `Some(0)`: default).
+    pub fn set_context_tokens(&mut self, name: &str, context_tokens: Option<u64>) {
+        let (hub, name) = (self.hub.clone(), name.to_string());
+        self.jobs.spawn(tr("Set an AI's context limit"), false, move |_| {
+            hub.set_context_tokens(&name, context_tokens).map_err(|e| e.message)?;
+            Ok(crate::backends(&hub))
+        });
+    }
+
     /// Connect the server in Settings → AI's address form. Its key goes to the keychain; the form
     /// keeps what was typed until it's added, so a mistake can be fixed.
     pub fn add_server(&mut self) {
         let hub = self.hub.clone();
         let f = &self.server_form;
         let (name, address, model, key) = (f.name.trim().to_string(), f.address.clone(), f.model.trim().to_string(), Some(f.key.clone()));
+        let context_tokens = match f.context_tokens.trim() {
+            "" => None,
+            raw => match raw.parse::<u64>() {
+                Ok(0) => None,
+                Ok(n) => Some(n),
+                Err(_) => {
+                    self.toast(tr("Context tokens must be a whole number."), true);
+                    return;
+                }
+            },
+        };
         let choices = self.backend_choices;
         let shown = name.clone();
         let job = self.jobs.spawn(trf("Connect {name}", &[("name", &name)]), true, move |j| {
-            let result = hub.add_server_until(&name, &address, Some(model.as_str()).filter(|m| !m.is_empty()), key, &j.cancel).map(|_| ());
+            let result =
+                hub.add_server_with_context(&name, &address, Some(model.as_str()).filter(|m| !m.is_empty()), key, context_tokens, &j.cancel).map(|_| ());
             Ok(crate::Done::BackendAdded { name, result, choices })
         });
         self.server_form.connecting = Some((job, shown, std::time::Instant::now()));
