@@ -263,6 +263,9 @@ const LAN_SUFFIXES: &[&str] = &[".local", ".lan", ".home.arpa", ".internal"];
 /// budget (150,000) rather than the local default (24,000).
 pub(crate) fn is_frontier_cloud_model(model: &str) -> bool {
     let lower = model.to_ascii_lowercase();
+    if lower.contains(':') {
+        return false;
+    }
     const PREFIXES: &[&str] = &["gemini-", "claude-", "gpt-4", "gpt-5", "o1", "o3", "o4", "deepseek-"];
     PREFIXES.iter().any(|prefix| lower.starts_with(prefix))
 }
@@ -686,7 +689,7 @@ mod tests {
         ] {
             assert!(is_frontier_cloud_model(model), "{model}");
         }
-        for model in ["llama3.3:70b", "qwen2.5-coder:32b", "mistral-small", "phi-4", "gemma-2-9b"] {
+        for model in ["llama3.3:70b", "qwen2.5-coder:32b", "deepseek-r1:8b", "deepseek-coder:6.7b", "mistral-small", "phi-4", "gemma-2-9b"] {
             assert!(!is_frontier_cloud_model(model), "{model}");
         }
     }

@@ -1005,7 +1005,7 @@ fn only_an_openai_compatible_server_nearby_is_local() {
 }
 
 #[test]
-fn frontier_cloud_models_on_local_proxy_use_cloud_context_budget() {
+fn frontier_cloud_models_on_local_proxy_keep_unset_slot_budget_and_use_cloud_default() {
     let (h, _d) = hub();
     h.add_backend(
         BackendConfig {
@@ -1020,13 +1020,15 @@ fn frontier_cloud_models_on_local_proxy_use_cloud_context_budget() {
     )
     .unwrap();
     let slot = h.build_model(&h.entry("LocalProxy").unwrap()).unwrap();
-    assert_eq!(slot.context_tokens, context::CLOUD_CONTEXT_TOKENS);
+    assert!(slot.local);
+    assert_eq!(slot.context_tokens, 0, "automatic default must not cap server-reported windows");
+    assert!(detect::is_frontier_cloud_model(&slot.model.model()));
 
     h.add_backend(
         BackendConfig {
             name: "Ollama".into(),
             kind: BackendKind::OpenaiCompatible,
-            model: "qwen3:8b".into(),
+            model: "deepseek-r1:8b".into(),
             base_url: Some("http://127.0.0.1:11434/v1".into()),
             ssh_host: None,
             enabled: true,
@@ -1035,7 +1037,9 @@ fn frontier_cloud_models_on_local_proxy_use_cloud_context_budget() {
     )
     .unwrap();
     let local_slot = h.build_model(&h.entry("Ollama").unwrap()).unwrap();
+    assert!(local_slot.local);
     assert_eq!(local_slot.context_tokens, 0);
+    assert!(!detect::is_frontier_cloud_model(&local_slot.model.model()));
 }
 
 fn add(h: &AiHub, name: &str, kind: BackendKind, base: &str, key: Option<&str>) {
